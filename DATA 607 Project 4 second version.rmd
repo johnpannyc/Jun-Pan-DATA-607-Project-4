@@ -1,0 +1,211 @@
+---
+title: "DATA 607 Project 4"
+author: "Jun Pan"
+date: "November 2, 2018"
+output: html_document
+---
+
+```
+PROJECT 4: Document Classification
+It can be useful to be able to classify new "test" documents using already classified "training" documents.  A common example is using a corpus of labeled spam and ham (non-spam) e-mails to predict whether or not a new document is spam.  
+
+For this project, you can start with a spam/ham dataset, then predict the class of new documents (either withheld from the training dataset or from another source such as your own spam folder). 
+```
+
+In this project, two sets of data were downloaded.  One waas called as "spam"", the other was called as "ham".  
+
+Set working enviornment:
+```{r}
+require(tm)
+require(tidytext)
+require(RTextTools)
+require(knitr)
+require(tidyverse)
+require(kableExtra)
+require(wordcloud)
+require(plyr)
+require(class)
+require(tidyr)
+require(caret)
+require(ggplot2)
+```
+#GET DATA
+```{r}
+spam.ham <- c("easy_ham","spam")
+pathname <- "C:/Users/tbao/Desktop/CUNY MSDS notes/607/week 10/project 4/spamham/"
+```
+
+
+#Data Cleaning:
+```{r}
+cleancorpus <- function(Corpus){
+    corpus.tmp <- tm_map(Corpus,removePunctuation)      #remove punctuation
+    corpus.tmp <- tm_map(corpus.tmp, removeNumbers)     #remove numbers
+    corpus.tmp <-tm_map(corpus.tmp,tolower)             #change to low case
+    corpus.tmp <- tm_map(corpus.tmp, removeWords,c(stopwords("english")))     #remove English stopwords
+    corpus.tmp <- tm_map(corpus.tmp,stripWhitespace)    #remove space
+    return(corpus.tmp)
+}
+```
+
+
+#Build term document matrix
+```{r}
+generateTDM <- function(category,path){
+    e.dir <- sprintf("%s/%s",path,category)
+    e.cor <- Corpus(DirSource(directory=e.dir))
+    clean_corpus<- cleancorpus(e.cor)
+    e.tdm <- TermDocumentMatrix(clean_corpus)
+    e.tdm <- removeSparseTerms(e.tdm,.7)
+    
+}
+```
+
+
+```{r}
+tdm <- lapply(spam.ham,generateTDM, path=pathname)
+```
+
+```{r}
+str(tdm)
+```
+
+#SPAM
+```{r}
+m <- as.matrix(tmd[[1]]) 
+word_freqs <- sort(rowSums(m), decreasing=TRUE) 
+head(word_freqs,100)
+df <- data.frame(word=names(word_freqs), freq=word_freqs) 
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "Spam")
+wordcloud(df$word, df$freq,max.words = 200, random.order=FALSE, colors=brewer.pal(6, "Dark2"),main="Title") 
+```
+
+```{r}
+newdf <- subset(df, freq > 2000)
+a <-ggplot(newdf, aes(x=freq, y = word, color = freq)) + geom_count() 
+print(a)
+```
+
+
+
+# EASY_HAM
+```{r}
+m <- as.matrix(tdm[[2]]) 
+word_freqs <- sort(rowSums(m), decreasing=TRUE) 
+head(word_freqs,100)
+df <- data.frame(word=names(word_freqs), freq=word_freqs) 
+layout(matrix(c(1, 2), nrow=2), heights=c(1, 4))
+par(mar=rep(0, 4))
+plot.new()
+text(x=0.5, y=0.5, "easy_ham")
+wordcloud(df$word, df$freq,max.words = 200, random.order=FALSE, colors=brewer.pal(5, "Dark2"),main="Title") 
+```
+
+```{r}
+newdf <- subset(df, freq > 500)
+a <-ggplot(newdf, aes(x=freq, y = word, color = freq)) + geom_count() 
+print(a)
+```
+
+## Build a Term Document Matrix for analysis
+```{r}
+
+## Function to build TDM
+buildTDM <- function(category,path){
+    e.dir <- sprintf("%s/%s",path,category)
+    e.cor <- Corpus(DirSource(directory=e.dir))
+    e.cor.cl <- cleancorpus(e.cor)
+    e.tdm <- DocumentTermMatrix(e.cor.cl)
+    e.tdm <- removeSparseTerms(e.tdm,.7)
+    result <- list(name=category, tdm=e.tdm)
+}
+```
+
+
+
+```{r}
+##Function to bind two list elements of TDM together mapped with (spam/easyham)
+bindcategory<- function(tdm){
+    e.mat <- data.matrix(tdm[["tdm"]])
+    e.df <- as.data.frame(e.mat)
+    e.df <- cbind(e.df, rep(tdm[["name"]],nrow(e.df)))
+    colnames(e.df)[ncol(e.df)] <- "target_category"
+    return(e.df)
+}
+```
+
+
+```{r}
+##Build TDM
+tdm <- lapply(spam.ham,buildTDM, path=pathname)
+my_tdm <- lapply(tdm,bindcategory)
+```
+
+```{r}
+##Join list and fill na with 0
+tdm_joined <- do.call(rbind.fill, my_tdm)
+tdm_joined[is.na(tdm_joined)] <- 0
+## Check row count should equal 2551(easy_ham)+501(spam)
+print (dim(tdm_joined))
+```
+
+## Create test/train split and prep for KNN
+```{r}
+train.idx <- sample(nrow(tdm_joined),.7*nrow(tdm_joined),replace = FALSE)
+test.idx <- (1:nrow(tdm_joined))[-train.idx]
+```
+
+
+```{r}
+head(train.idx)
+```
+
+```{r}
+head(test.idx)
+```
+
+
+## predict using test data
+```{r}
+round(prop.table(table(tdm_joined$target_category))*100)
+round(prop.table(table(tdm_joined[train.idx,"target_category"]))*100)
+
+
+## Extract target vector and rest of DF for KNN
+tdm_cats <-tdm_joined[,"target_category"] 
+tdm_notcats <- tdm_joined[,!colnames(tdm_joined)%in%"target_category"]
+```
+
+
+```{r}
+knn_pred <- knn(tdm_notcats[train.idx,],tdm_notcats[test.idx,],tdm_cats[train.idx],k=1)
+knn_pred_2<- knn(tdm_notcats[train.idx,],tdm_notcats[test.idx,],tdm_cats[train.idx],k=3)
+knn_pred_3<- knn(tdm_notcats[train.idx,],tdm_notcats[test.idx,],tdm_cats[train.idx],k=15)
+```
+
+
+
+
+
+```{r}
+confusion_matrix <-table('Predictions'=knn_pred,"Actual"=tdm_cats[test.idx]) 
+kable(confusion_matrix)
+confusion_matrix_2 <-table('Predictions'=knn_pred_2,"Actual"=tdm_cats[test.idx]) 
+kable(confusion_matrix_2)
+confusion_matrix_3 <-table('Predictions'=knn_pred_3,"Actual"=tdm_cats[test.idx]) 
+kable(confusion_matrix_3)
+
+
+accuracy_knn <- sum(diag(confusion_matrix))/length(test.idx)*100
+accuracy_knn
+accuracy_knn_2 <- sum(diag(confusion_matrix_2))/length(test.idx)*100
+accuracy_knn_2
+accuracy_knn_3 <- sum(diag(confusion_matrix_3))/length(test.idx)*100
+accuracy_knn_3
+```
+
+
+
